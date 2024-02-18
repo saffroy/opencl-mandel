@@ -5,9 +5,7 @@
 
 #include <CL/cl.h>
 
-#ifndef FLOAT
-#define FLOAT double // Note: must match .cl file
-#endif
+#include "mandel.h"
 
 #define XSTEPS 800
 #define YSTEPS 600
@@ -19,7 +17,8 @@
 #define DX (XRANGE / (FLOAT)XSTEPS)
 #define DY (YRANGE / (FLOAT)YSTEPS)
 
-#define MAXITER 256
+#define MAXLOOP 256*10
+#define MAXITER 256*100
 
 #define ASSERT_CL_SUCCESS(_rc)                                          \
         do {                                                            \
@@ -80,7 +79,7 @@ build_prog(cl_context ctx, cl_device_id device) {
         ASSERT_CL_SUCCESS(rc);
         free(prog);
 
-        rc = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
+        rc = clBuildProgram(program, 0, NULL, "-I.", NULL, NULL);
         if (rc != CL_SUCCESS) {
                 fprintf(stderr, "clBuildProgram error: %d\n", rc);
 
@@ -104,20 +103,21 @@ build_prog(cl_context ctx, cl_device_id device) {
 }
 
 int main() {
-#define SIZE_REALS (sizeof(*reals) * XSTEPS)
-#define SIZE_IMAGS (sizeof(*imags) * YSTEPS)
-#define SIZE_ITERS (sizeof(*iters) * XSTEPS * YSTEPS)
+#define SIZE_STATE (sizeof(*statevec) * XSTEPS * YSTEPS)
+        struct point_state *statevec = malloc(SIZE_STATE);
+        assert(statevec);
 
-        FLOAT *reals = calloc(SIZE_REALS, 1);
-        FLOAT *imags = calloc(SIZE_IMAGS, 1);
-        int *iters = calloc(SIZE_ITERS, 1);
-
-        assert(reals && imags && iters);
-
-        for (int i = 0; i < XSTEPS; i++)
-                reals[i] = XMIN + (FLOAT)i * DX;
-        for (int i = 0; i < YSTEPS; i++)
-                imags[i] = YMIN + (FLOAT)i * DY;
+        for (int j = 0; j < YSTEPS; j++) {
+                for (int i = 0; i < XSTEPS; i++) {
+                        struct point_state *state = statevec + j*XSTEPS + i;
+                        state->x0 = XMIN + (FLOAT)i * DX;
+                        state->y0 = YMIN + (FLOAT)j * DY;
+                        state->x = state->x0;
+                        state->y = state->y0;
+                        state->iters = 0;
+                        state->escaped = 0;
+                }
+        }
 
         cl_device_id device = find_device();
         cl_int rc;
@@ -127,18 +127,12 @@ int main() {
         ASSERT_CL_SUCCESS(rc);
 
         // device memory buffers
-        cl_mem reals_d = clCreateBuffer(ctx, CL_MEM_READ_ONLY,
-                                        SIZE_REALS, NULL, NULL);
-        cl_mem imags_d = clCreateBuffer(ctx, CL_MEM_READ_ONLY,
-                                        SIZE_IMAGS, NULL, NULL);
-        cl_mem iters_d = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY,
-                                        SIZE_ITERS, NULL, NULL);
-
-        rc = clEnqueueWriteBuffer(cq, reals_d, CL_TRUE, 0,
-                                  SIZE_REALS, reals, 0, NULL, NULL);
+        cl_mem state_d = clCreateBuffer(ctx, CL_MEM_READ_WRITE,
+                                        SIZE_STATE, NULL, &rc);
         ASSERT_CL_SUCCESS(rc);
-        rc = clEnqueueWriteBuffer(cq, imags_d, CL_TRUE, 0,
-                                  SIZE_IMAGS, imags, 0, NULL, NULL);
+
+        rc = clEnqueueWriteBuffer(cq, state_d, CL_TRUE, 0,
+                                  SIZE_STATE, statevec, 0, NULL, NULL);
         ASSERT_CL_SUCCESS(rc);
         
         // kernel
@@ -146,34 +140,33 @@ int main() {
         cl_kernel kernel = clCreateKernel(prog, "mandel_iters", &rc);
         ASSERT_CL_SUCCESS(rc);
 
-        int arg_xsteps = XSTEPS;
         int arg_maxiters = MAXITER;
+        int arg_maxloops = MAXLOOP;
 
-        rc = clSetKernelArg(kernel, 0, sizeof(arg_xsteps), &arg_xsteps);
+        rc = clSetKernelArg(kernel, 0, sizeof(arg_maxiters), &arg_maxiters);
         ASSERT_CL_SUCCESS(rc);
-        rc = clSetKernelArg(kernel, 1, sizeof(arg_maxiters), &arg_maxiters);
+        rc = clSetKernelArg(kernel, 1, sizeof(arg_maxloops), &arg_maxloops);
         ASSERT_CL_SUCCESS(rc);
-        rc = clSetKernelArg(kernel, 2, sizeof(cl_mem), &reals_d); 
-        ASSERT_CL_SUCCESS(rc);
-        rc = clSetKernelArg(kernel, 3, sizeof(cl_mem), &imags_d); 
-        ASSERT_CL_SUCCESS(rc);
-        rc = clSetKernelArg(kernel, 4, sizeof(cl_mem), &iters_d);
+        rc = clSetKernelArg(kernel, 2, sizeof(cl_mem), &state_d); 
         ASSERT_CL_SUCCESS(rc);
 
-        // enqueue job
-        size_t local_size = 256; // max work group size (from clinfo)
+        // enqueue jobs
+        size_t local_size = 32; // seems to give best performance, no clue why
         size_t global_size = XSTEPS * YSTEPS;
-        rc = clEnqueueNDRangeKernel(cq, kernel, 1, NULL,
-                                    &global_size, &local_size, 0, NULL, NULL);
-        ASSERT_CL_SUCCESS(rc);
+        for (int i = 0; i < MAXITER; i+= MAXLOOP)
+        {
+                rc = clEnqueueNDRangeKernel(cq, kernel, 1, NULL,
+                                            &global_size, &local_size, 0, NULL, NULL);
+                ASSERT_CL_SUCCESS(rc);
+        }
 
         // wait for completion
         rc = clFinish(cq);
         ASSERT_CL_SUCCESS(rc);
 
         // read back results
-        rc = clEnqueueReadBuffer(cq, iters_d, CL_TRUE, 0,
-                                 SIZE_ITERS, iters, 0, NULL, NULL);
+        rc = clEnqueueReadBuffer(cq, state_d, CL_TRUE, 0,
+                                 SIZE_STATE, statevec, 0, NULL, NULL);
         ASSERT_CL_SUCCESS(rc);
 
         // release resources
@@ -181,11 +174,7 @@ int main() {
         ASSERT_CL_SUCCESS(rc);
         rc = clReleaseProgram(prog);
         ASSERT_CL_SUCCESS(rc);
-        rc = clReleaseMemObject(reals_d);
-        ASSERT_CL_SUCCESS(rc);
-        rc = clReleaseMemObject(imags_d);
-        ASSERT_CL_SUCCESS(rc);
-        rc = clReleaseMemObject(iters_d);
+        rc = clReleaseMemObject(state_d);
         ASSERT_CL_SUCCESS(rc);
         rc = clReleaseCommandQueue(cq);
         ASSERT_CL_SUCCESS(rc);
@@ -196,16 +185,17 @@ int main() {
         FILE *out = fopen("mandel.ppm", "w");
         assert(out);
         fprintf(out, "P3\n%d %d\n255\n", XSTEPS, YSTEPS);
-        for (int i = 0; i < XSTEPS*YSTEPS; i++) {
-                int it = iters[i];
-                int c = it == MAXITER ? 0 : it % 256;
-                fprintf(out, "%d %d %d\n", c, c, c);
+        for (int j = 0; j < YSTEPS; j++) {
+                for (int i = 0; i < XSTEPS; i++) {
+                        struct point_state *state = statevec + j*XSTEPS + i;
+                        int c = (state->iters == MAXITER
+                                 ? 0 : state->iters % 256);
+                        fprintf(out, "%d %d %d\n", c, c, c);
+                }
         }
         fclose(out);
 
-        free(iters);
-        free(reals);
-        free(imags);
+        free(statevec);
 
         return 0;
 }

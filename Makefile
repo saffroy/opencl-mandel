@@ -8,7 +8,9 @@ all: mandel.png
 	convert $^ $@
 
 mandel.ppm: mandel mandel.cl
-	./mandel
+	time ./mandel
+
+mandel: mandel.c mandel.h
 
 .PHONY: clean
 clean:
