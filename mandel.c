@@ -7,12 +7,12 @@
 
 #include "mandel.h"
 
-#define XSTEPS 800
-#define YSTEPS 600
+#define XSTEPS 1024
+#define YSTEPS 1024
 
-#define XMIN -2.5
+#define XMIN -2.0
 #define YMIN -1.5
-#define XRANGE 4.0
+#define XRANGE 3.0
 #define YRANGE 3.0
 #define DX (XRANGE / (FLOAT)XSTEPS)
 #define DY (YRANGE / (FLOAT)YSTEPS)
