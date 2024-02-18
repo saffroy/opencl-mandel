@@ -75,7 +75,8 @@ build_prog(cl_context ctx, cl_device_id device) {
 
         cl_int rc;
         cl_program program =
-                clCreateProgramWithSource(ctx, 1, &prog, &prog_len, &rc);
+                clCreateProgramWithSource(ctx, 1, (const char**)&prog,
+                                          &prog_len, &rc);
         ASSERT_CL_SUCCESS(rc);
         free(prog);
 
