@@ -81,9 +81,24 @@ build_prog(cl_context ctx, cl_device_id device) {
         free(prog);
 
         rc = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
-        ASSERT_CL_SUCCESS(rc);
+        if (rc != CL_SUCCESS) {
+                fprintf(stderr, "clBuildProgram error: %d\n", rc);
 
-        //XXX TODO: log build errors
+                size_t build_log_len;
+                rc = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG,
+                                           0, NULL, &build_log_len);
+                ASSERT_CL_SUCCESS(rc);
+
+                char *buff_erro = malloc(build_log_len);
+                assert(buff_erro);
+
+                rc = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG,
+                                           build_log_len, buff_erro, NULL);
+                ASSERT_CL_SUCCESS(rc);
+
+                fprintf(stderr,"Build log: \n%s\n", buff_erro);
+                exit(1);
+        }
 
         return program;
 }
